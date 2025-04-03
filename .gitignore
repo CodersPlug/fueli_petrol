@@ -27,6 +27,7 @@ sshkey*
 data/*.xlsx
 data/*.xls
 data/*.xml
+*.db
 
 # Logs
 *.log
