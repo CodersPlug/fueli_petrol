@@ -1,9 +1,8 @@
 import streamlit as st
 import pandas as pd
 from datetime import datetime
-import os
-from pathlib import Path
-import traceback
+from auth import get_current_organization
+from database import get_despachos
 
 def format_argentine_number(x):
     """Format number in Argentine style (comma as decimal, period as thousands)"""
@@ -39,112 +38,109 @@ def render():
     st.title("Análisis de Despachos")
     
     try:
-        # Read the consolidated CSV file from the data directory
-        df = pd.read_csv('data/consolidated_data.csv')
+        # Get current organization
+        organization = get_current_organization()
         
-        # Clean Producto and Pico columns
-        df['Producto'] = df['Producto'].apply(clean_product_name)
-        df['Pico'] = df['Pico'].apply(clean_pico_id)
+        # Get non-GNC data from database
+        df = get_despachos(organization=organization)
+        df = df[df['producto'] != 'GNC']  # Filter out GNC
         
-        # Filter for non-GNC products
-        df = df[df['Producto'] != 'GNC']
+        # Check if we have any data
+        if len(df) == 0:
+            st.warning(f"No se encontraron datos para la organización {organization}")
+            return
         
-        # Create Fecha column from Año, Mes, Día
-        df['Fecha'] = pd.to_datetime({
-            'year': df['Año'].astype(int),
-            'month': df['Mes'].astype(int),
-            'day': df['Día'].astype(int)
-        })
+        # Clean product and pico columns
+        df['producto'] = df['producto'].apply(clean_product_name)
+        df['pico'] = df['pico'].apply(clean_pico_id)
         
-        # Add Hora column (default to 00:00 since we don't have time data)
-        df['Hora'] = '00:00'
-        
-        # Set specific column order
-        columns_order = ['Fecha', 'Hora', 'Sucursal', 'Pico', 'Producto', 'Volumen', 'Importe', 'PPU']
-        df = df[columns_order]
+        # Convert fecha to datetime if it's not already
+        df['fecha'] = pd.to_datetime(df['fecha'])
         
         # Add filters
-        col1, col2, col3 = st.columns(3)
+        col1, col2, col3, col4 = st.columns(4)
         
         with col1:
             # Date range filter
-            try:
-                min_date = df['Fecha'].min().date()
-                max_date = df['Fecha'].max().date()
-                date_range = st.date_input(
-                    "Período",
-                    value=(min_date, max_date),
-                    min_value=min_date,
-                    max_value=max_date
-                )
-            except Exception as e:
-                st.error(f"Error en filtro de fecha: {str(e)}")
-                # Fallback to default date range
-                date_range = None
+            min_date = df['fecha'].min().date()
+            max_date = df['fecha'].max().date()
+            date_range = st.date_input(
+                "Período",
+                value=(min_date, max_date),
+                min_value=min_date,
+                max_value=max_date,
+                key="date_range_liquidos"
+            )
         
         with col2:
+            # Sucursal filter
+            sucursales = sorted(df['sucursal'].unique())
+            sucursal_selected = st.multiselect(
+                "Sucursal",
+                options=sucursales,
+                default=None,  # No default selection
+                placeholder="Seleccionar sucursales...",
+                key="sucursal_multiselect_liquidos"
+            )
+
+        with col3:
             # Product filter - exclude 'Sin Producto' from default selection
-            productos = sorted([p for p in df['Producto'].unique() if p != 'Sin Producto'])
+            productos = sorted([p for p in df['producto'].unique() if p != 'Sin Producto'])
             producto_selected = st.multiselect(
                 "Producto",
                 options=productos,
                 default=None,  # No default selection
-                placeholder="Seleccionar productos..."
+                placeholder="Seleccionar productos...",
+                key="producto_multiselect_liquidos"
             )
             
-        with col3:
+        with col4:
             # Pico filter - exclude 'Sin Pico' from default selection
-            picos = sorted([p for p in df['Pico'].unique() if p != 'Sin Pico'])
+            picos = sorted([p for p in df['pico'].unique() if p != 'Sin Pico'])
             pico_selected = st.multiselect(
                 "Pico",
                 options=picos,
                 default=None,  # No default selection
-                placeholder="Seleccionar picos..."
+                placeholder="Seleccionar picos...",
+                key="pico_multiselect_liquidos"
             )
         
         # Apply filters
-        filtered_df = df.copy()
-        
         if date_range and len(date_range) == 2:
-            try:
-                # Convert date_range to datetime.date objects if they aren't already
-                start_date = date_range[0]
-                end_date = date_range[1]
-                
-                # Apply date filter only if the selected range is different from the full range
-                if start_date > filtered_df['Fecha'].min().date() or end_date < filtered_df['Fecha'].max().date():
-                    mask = (filtered_df['Fecha'].dt.date >= start_date) & (filtered_df['Fecha'].dt.date <= end_date)
-                    filtered_df = filtered_df[mask]
-            except Exception as e:
-                st.error(f"Error al aplicar filtro de fecha: {str(e)}")
-        
-        if producto_selected:  # Only apply filter if products are selected
-            filtered_df = filtered_df[filtered_df['Producto'].isin(producto_selected)]
-            
-        if pico_selected:  # Only apply filter if picos are selected
-            filtered_df = filtered_df[filtered_df['Pico'].isin(pico_selected)]
+            df = get_despachos(
+                organization=organization,
+                producto=producto_selected if producto_selected else None,
+                start_date=date_range[0],
+                end_date=date_range[1],
+                pico=pico_selected if pico_selected else None
+            )
+            # Filter out GNC after getting data
+            df = df[df['producto'] != 'GNC']
+            # Apply sucursal filter after getting data (since get_despachos doesn't support it directly)
+            if sucursal_selected:
+                df = df[df['sucursal'].isin(sucursal_selected)]
 
         # Display summary statistics
         with st.expander("📈 Resumen", expanded=True):
             col1, col2, col3 = st.columns(3)
             
             with col1:
-                total_importe = filtered_df['Importe'].sum()
+                total_importe = df['importe'].sum()
                 st.metric("Importe Total", format_argentine_currency(total_importe))
                 
             with col2:
-                total_volumen = filtered_df['Volumen'].sum()
+                total_volumen = df['volumen'].sum()
                 st.metric("Volumen Total", format_argentine_number(total_volumen))
                 
             with col3:
-                total_despachos = len(filtered_df)
+                total_despachos = len(df)
                 st.metric("Total Despachos", format_argentine_number(total_despachos))
             
             # Summary by product
             st.subheader("Resumen por Producto")
-            summary = filtered_df.groupby('Producto').agg({
-                'Importe': ['count', 'sum'],
-                'Volumen': 'sum'
+            summary = df.groupby('producto').agg({
+                'importe': ['count', 'sum'],
+                'volumen': 'sum'
             }).round(2)
             
             # Format the summary
@@ -158,24 +154,34 @@ def render():
         # Display data section inside an expander
         with st.expander("📊 Datos de Despachos", expanded=True):
             # Create a copy of the DataFrame for display
-            display_df = filtered_df.copy()
+            display_df = df.copy()
             
-            # Format the Fecha column to show only the date
-            if 'Fecha' in display_df.columns:
-                display_df['Fecha'] = display_df['Fecha'].dt.strftime('%d/%m/%Y')
+            # Select only the columns we want to display, with sucursal as the third column
+            display_columns = ['fecha', 'hora', 'sucursal', 'pico', 'producto', 'volumen', 'importe', 'ppu']
+            display_df = display_df[display_columns]
+            
+            # Format the fecha column to show only the date
+            display_df['fecha'] = display_df['fecha'].dt.strftime('%d/%m/%Y')
             
             # Format numeric columns
-            if 'Volumen' in display_df.columns:
-                display_df['Volumen'] = display_df['Volumen'].apply(format_argentine_number)
+            display_df['volumen'] = display_df['volumen'].apply(format_argentine_number)
+            display_df['importe'] = display_df['importe'].apply(format_argentine_currency)
+            display_df['ppu'] = display_df['ppu'].apply(format_argentine_number)
             
-            if 'Importe' in display_df.columns:
-                display_df['Importe'] = display_df['Importe'].apply(format_argentine_currency)
-            
-            if 'PPU' in display_df.columns:
-                display_df['PPU'] = display_df['PPU'].apply(format_argentine_number)
+            # Rename columns for display
+            display_df = display_df.rename(columns={
+                'fecha': 'Fecha',
+                'hora': 'Hora',
+                'sucursal': 'Sucursal',
+                'pico': 'Pico',
+                'producto': 'Producto',
+                'volumen': 'Volumen',
+                'importe': 'Importe',
+                'ppu': 'PPU'
+            })
             
             # Display total records
-            st.write(f"Cantidad de registros: {len(filtered_df)}")
+            st.write(f"Cantidad de registros: {len(df)}")
             
             # Add pagination controls
             col1, col2, col3 = st.columns([1, 2, 1])
@@ -185,7 +191,7 @@ def render():
                     "Registros por página",
                     options=[10, 25, 50, 100],
                     index=1,  # Default to 25
-                    key="page_size_liquidos"  # Add unique key
+                    key="page_size_liquidos"
                 )
             
             # Calculate pagination
@@ -219,5 +225,4 @@ def render():
             )
         
     except Exception as e:
-        st.error(f"Error al cargar el archivo: {str(e)}")
-        st.error(f"Detalles del error: {traceback.format_exc()}") 
+        st.error(f"Error al cargar los datos: {str(e)}") 

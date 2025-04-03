@@ -195,12 +195,14 @@ def process_excel_file(file_path):
         return None
 
 def main():
-    # Get all Excel files in the data directory
+    # Get all Excel files in the data directory and its subdirectories
     data_dir = Path('data')
-    excel_files = list(data_dir.glob('*.xls*'))
+    excel_files = []
+    for pattern in ['**/*.xls', '**/*.xlsx']:
+        excel_files.extend(data_dir.glob(pattern))
     
     if not excel_files:
-        print("No Excel files found in data directory")
+        print("No Excel files found in data directory or subdirectories")
         return
     
     print(f"Found {len(excel_files)} Excel files to process")
@@ -208,6 +210,7 @@ def main():
     # Process each file and combine results
     all_data = []
     for file_path in excel_files:
+        print(f"\nProcessing {file_path}")
         df = process_excel_file(file_path)
         if df is not None and len(df) > 0:
             all_data.append(df)
