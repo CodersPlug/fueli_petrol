@@ -23,31 +23,24 @@ def format_argentine_currency(x):
         return x
 
 def render():
-    st.title("Análisis de Despachos GNC")
+    st.title("Análisis de Despachos")
     
     try:
-        # Read the CSV file from the data directory
-        df = pd.read_csv('data/gnc.csv')
+        # Read the consolidated CSV file from the data directory
+        df = pd.read_csv('data/consolidated_data.csv')
         
-        # Convert Fecha to datetime with dayfirst=True for DD/MM/YYYY format
-        df['Fecha'] = pd.to_datetime(df['Fecha'], dayfirst=True)
+        # Filter for GNC products
+        df = df[df['Producto'] == 'GNC']
         
-        # Convert Importe to numeric, removing currency symbols and thousands separators
-        df['Importe'] = pd.to_numeric(df['Importe'].str.replace('[\$,]', '', regex=True), errors='coerce')
+        # Create Fecha column from Año, Mes, Día
+        df['Fecha'] = pd.to_datetime({
+            'year': df['Año'].astype(int),
+            'month': df['Mes'].astype(int),
+            'day': df['Día'].astype(int)
+        })
         
-        # Add Hora column from Fecha
-        df['Hora'] = df['Fecha'].dt.strftime('%H:%M')
-        
-        # Combine Surtidor and Manguera into Pico with space
-        def format_manguera(x):
-            try:
-                # If it's a number, convert to letter (1->a, 2->b, etc.)
-                return chr(96 + int(x))
-            except ValueError:
-                # If it's already a letter, return as is
-                return str(x).lower()
-        
-        df['Pico'] = df['Surtidor'].astype(str) + ' ' + df['Manguera'].astype(str).map(format_manguera)
+        # Add Hora column (default to 00:00 since we don't have time data)
+        df['Hora'] = '00:00'
         
         # Set specific column order
         columns_order = ['Fecha', 'Hora', 'Sucursal', 'Pico', 'Volumen', 'Importe', 'PPU']
@@ -58,8 +51,8 @@ def render():
         
         with col1:
             # Date range filter
-            min_date = df['Fecha'].min()
-            max_date = df['Fecha'].max()
+            min_date = df['Fecha'].min().date()
+            max_date = df['Fecha'].max().date()
             date_range = st.date_input(
                 "Período",
                 value=(min_date, max_date),
@@ -73,21 +66,33 @@ def render():
             pico_selected = st.multiselect(
                 "Pico",
                 options=picos,
-                default=picos
+                default=None,  # No default selection
+                placeholder="Seleccionar picos..."
             )
         
         # Apply filters
-        if len(date_range) == 2:
-            mask = (df['Fecha'].dt.date >= date_range[0]) & (df['Fecha'].dt.date <= date_range[1])
-            df = df[mask]
+        filtered_df = df.copy()
         
-        if pico_selected:
-            df = df[df['Pico'].isin(pico_selected)]
+        if date_range and len(date_range) == 2:
+            try:
+                # Convert date_range to datetime.date objects if they aren't already
+                start_date = date_range[0]
+                end_date = date_range[1]
+                
+                # Apply date filter only if the selected range is different from the full range
+                if start_date > filtered_df['Fecha'].min().date() or end_date < filtered_df['Fecha'].max().date():
+                    mask = (filtered_df['Fecha'].dt.date >= start_date) & (filtered_df['Fecha'].dt.date <= end_date)
+                    filtered_df = filtered_df[mask]
+            except Exception as e:
+                st.error(f"Error al aplicar filtro de fecha: {str(e)}")
+            
+        if pico_selected:  # Only apply filter if picos are selected
+            filtered_df = filtered_df[filtered_df['Pico'].isin(pico_selected)]
 
         # Display data section inside an expander
         with st.expander("📊 Datos de Despachos", expanded=True):
             # Create a copy of the DataFrame for display
-            display_df = df.copy()
+            display_df = filtered_df.copy()
             
             # Format the Fecha column to show only the date
             if 'Fecha' in display_df.columns:
@@ -104,7 +109,7 @@ def render():
                 display_df['PPU'] = display_df['PPU'].apply(format_argentine_number)
             
             # Display total records
-            st.write(f"Cantidad de registros: {len(df)}")
+            st.write(f"Cantidad de registros: {len(filtered_df)}")
             
             # Add pagination controls
             col1, col2, col3 = st.columns([1, 2, 1])
@@ -113,23 +118,27 @@ def render():
                 page_size = st.selectbox(
                     "Registros por página",
                     options=[10, 25, 50, 100],
-                    index=1  # Default to 25
+                    index=1,  # Default to 25
+                    key="page_size_gnc"  # Add unique key
                 )
             
             # Calculate pagination
             total_pages = (len(display_df) + page_size - 1) // page_size
-            current_page = st.session_state.get('current_page', 1)
+            current_page = st.session_state.get('current_page_gnc', 1)
             
             with col2:
                 st.write(f"Página {current_page} de {total_pages}")
             
             with col3:
-                if current_page > 1:
-                    if st.button("← Anterior"):
-                        st.session_state.current_page = current_page - 1
-                if current_page < total_pages:
-                    if st.button("Siguiente →"):
-                        st.session_state.current_page = current_page + 1
+                col3_1, col3_2 = st.columns(2)
+                with col3_1:
+                    if current_page > 1:
+                        if st.button("← Anterior", key="prev_gnc"):
+                            st.session_state.current_page_gnc = current_page - 1
+                with col3_2:
+                    if current_page < total_pages:
+                        if st.button("Siguiente →", key="next_gnc"):
+                            st.session_state.current_page_gnc = current_page + 1
             
             # Slice the dataframe for the current page
             start_idx = (current_page - 1) * page_size

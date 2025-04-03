@@ -23,6 +23,11 @@ build/
 sshkey*
 .env*
 
+# Raw data files
+data/*.xlsx
+data/*.xls
+data/*.xml
+
 # Logs
 *.log
 
